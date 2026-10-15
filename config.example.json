@@ -1,0 +1,26 @@
+{
+  "settings": {
+    "low_balance_usd": 2,
+    "timeout": 15,
+    "usd_cny": 7.2,
+    "max_usage_days": 120,
+    "auto_refresh_minutes": 0
+  },
+  "sites": [
+    {
+      "id": "site-demo",
+      "name": "示例站点",
+      "base_url": "https://your-relay.com",
+      "api_key": "sk-xxxxxxxxxxxxxxxx",
+      "access_token": "",
+      "session": "",
+      "user_id": "",
+      "quota_per_usd": null,
+      "usd_cny": null,
+      "insecure_ssl": false,
+      "enabled": true,
+      "note": "",
+      "created_at": "2026-01-01 00:00:00"
+    }
+  ]
+}

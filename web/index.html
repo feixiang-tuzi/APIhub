@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>API Hub · 中转站聚合面板</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%234f8ef7'/%3E%3Cpath d='M9 20.5V15m5 5.5V11m5 9.5v-8m5 8V13' stroke='white' stroke-width='2.4' stroke-linecap='round'/%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo">
+        <svg viewBox="0 0 32 32" width="30" height="30"><rect width="32" height="32" rx="9" fill="#4f8ef7"/><path d="M9 20.5V15m5 5.5V11m5 9.5v-8m5 8V13" stroke="#fff" stroke-width="2.4" stroke-linecap="round"/></svg>
+      </div>
+      <div class="brand-text">
+        <h1>API Hub</h1>
+        <p>中转站 · 余额 / 用量 / 模型 聚合面板</p>
+      </div>
+    </div>
+
+    <div class="top-actions">
+      <label class="auto-refresh">
+        <span class="dot-live" id="live-dot"></span>
+        <select id="auto-refresh">
+          <option value="0">手动刷新</option>
+          <option value="60">每 1 分钟</option>
+          <option value="300" selected>每 5 分钟</option>
+          <option value="900">每 15 分钟</option>
+          <option value="1800">每 30 分钟</option>
+        </select>
+      </label>
+      <button class="btn primary" id="btn-refresh">
+        <svg viewBox="0 0 20 20" width="15" height="15"><path d="M17 10a7 7 0 11-2.05-4.95" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/><path d="M17 2.6v4h-4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        刷新全部
+      </button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats"></section>
+
+  <nav class="tabs" id="tabs">
+    <button class="tab active" data-view="overview">总览</button>
+    <button class="tab" data-view="models">模型矩阵</button>
+    <button class="tab" data-view="usage">用量分析</button>
+    <button class="tab" data-view="sites">站点管理</button>
+  </nav>
+
+  <main>
+    <!-- 总览 -->
+    <section class="view" id="view-overview">
+      <div class="view-bar">
+        <div class="vb-tools">
+          <div class="search sm">
+            <svg viewBox="0 0 20 20" width="15" height="15"><circle cx="9" cy="9" r="5.6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M13.2 13.2L17 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            <input id="site-search" type="text" placeholder="搜索站点名 / 域名">
+          </div>
+          <div class="sort-ctl" id="ov-sort">
+            <svg viewBox="0 0 20 20" width="14" height="14"><path d="M6 4v12M6 16l-2.6-2.6M6 16l2.6-2.6" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/><path d="M11 5.6h6M11 10h4.4M11 14.4h3" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+            <select id="ov-sort-key" title="排序字段">
+              <option value="custom">自定义顺序</option>
+              <option value="name">名称</option>
+              <option value="balance">余额</option>
+              <option value="used">已用金额</option>
+              <option value="requests">请求数</option>
+              <option value="models">模型数</option>
+              <option value="note">备注</option>
+              <option value="status">状态</option>
+            </select>
+            <button class="sort-dir" id="ov-sort-dir" title="切换升序 / 降序">
+              <svg viewBox="0 0 20 20" width="15" height="15"><path d="M10 3.6v12.8M5.6 11.8L10 16.2l4.4-4.4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="seg" id="ov-layout" role="tablist" aria-label="展示方式">
+          <button class="seg-btn active" data-layout="card" title="卡片视图">
+            <svg viewBox="0 0 20 20" width="15" height="15"><rect x="3" y="3" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="11" y="3" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="3" y="11" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.7"/><rect x="11" y="11" width="6" height="6" rx="1.6" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>
+            卡片
+          </button>
+          <button class="seg-btn" data-layout="list" title="列表视图">
+            <svg viewBox="0 0 20 20" width="15" height="15"><path d="M4 5.5h12M4 10h12M4 14.5h12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+            列表
+          </button>
+        </div>
+      </div>
+      <div class="site-grid" id="site-grid"></div>
+      <div class="site-list-table panel" id="site-table-wrap" hidden>
+        <table class="site-table" id="site-table"></table>
+      </div>
+      <div class="empty-state" id="overview-empty" hidden>
+        <div class="empty-art">
+          <svg viewBox="0 0 120 90" width="150"><circle cx="60" cy="45" r="34" fill="#eaf2ff"/><rect x="26" y="52" width="9" height="20" rx="3" fill="#a9c8fb"/><rect x="41" y="42" width="9" height="30" rx="3" fill="#7fa9f5"/><rect x="56" y="34" width="9" height="38" rx="3" fill="#4f8ef7"/><rect x="71" y="46" width="9" height="26" rx="3" fill="#7fa9f5"/><rect x="86" y="56" width="9" height="16" rx="3" fill="#a9c8fb"/><circle cx="88" cy="26" r="9" fill="#3fc9a5" opacity=".85"/><path d="M84 26.5l2.8 2.8 5-5.6" stroke="#fff" stroke-width="2" fill="none" stroke-linecap="round"/></svg>
+        </div>
+        <h3>还没有添加任何中转站</h3>
+        <p>去「站点管理」填入 Base URL 和密钥即可。填了<b>访问令牌</b>或<b>会话 Cookie</b> 才能读到余额和用量。</p>
+        <div class="empty-actions">
+          <button class="btn primary" data-goto="sites">添加站点</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 模型矩阵 -->
+    <section class="view hidden" id="view-models">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>模型矩阵</h2>
+            <p class="panel-sub" id="matrix-sub">跨站点对比模型覆盖情况</p>
+          </div>
+          <div class="panel-tools">
+            <div class="search">
+              <svg viewBox="0 0 20 20" width="15" height="15"><circle cx="9" cy="9" r="5.6" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M13.2 13.2L17 17" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>
+              <input id="model-search" type="text" placeholder="搜索模型名，如 claude / deepseek">
+            </div>
+            <label class="switch"><input type="checkbox" id="only-common"><span></span>仅看多站共有</label>
+            <button class="btn primary sm" id="btn-test-all" title="对当前筛选出的每个 模型×站点 组合发一次最小请求">
+              <svg viewBox="0 0 20 20" width="14" height="14"><path d="M4 13.5l3.6-4 3 2.6L16 5" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M12.4 5H16v3.6" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              测试连通性
+            </button>
+            <button class="btn ghost sm" id="btn-test-clear" title="清除测试结果">清除</button>
+          </div>
+        </div>
+        <div class="matrix-note">
+          <div>
+            点格子里的 <b>✓</b> 可单独测试该模型在该站点是否连通；点「测试连通性」批量测当前筛选结果。
+            结果会显示<b>响应耗时</b>，绿色快、橙色偏慢；失效的模型会显示 ✕，鼠标悬停可看失败原因。
+            有的模型<b>只接受流式请求</b>，选「自动」时会自动改用流式重试。
+          </div>
+          <div class="matrix-note-tools">
+            <span class="mn-label">请求方式</span>
+            <div class="seg" data-test-mode="matrix">
+              <button class="seg-btn active" data-mode="auto" title="先发普通请求，被拒时自动改用流式">自动</button>
+              <button class="seg-btn" data-mode="plain" title="只发普通请求">仅普通</button>
+              <button class="seg-btn" data-mode="stream" title="只发流式请求">仅流式</button>
+            </div>
+          </div>
+        </div>
+        <div class="matrix-wrap"><table class="matrix" id="matrix"></table></div>
+      </div>
+    </section>
+
+    <!-- 用量分析 -->
+    <section class="view hidden" id="view-usage">
+      <div class="panel">
+        <div class="panel-head">
+          <div>
+            <h2>用量趋势</h2>
+            <p class="panel-sub" id="usage-sub">最近 14 天各站点消耗</p>
+          </div>
+          <div class="panel-tools">
+            <div class="range-pick" id="usage-range-pick"></div>
+            <label class="switch"><input type="checkbox" id="usage-cny"><span></span>显示为人民币</label>
+          </div>
+        </div>
+        <div class="chart-legend" id="usage-legend"></div>
+        <div class="chart-box"><svg id="line-chart" viewBox="0 0 900 260" preserveAspectRatio="none"></svg></div>
+      </div>
+
+      <div class="two-col">
+        <div class="panel">
+          <div class="panel-head"><div><h2>站点消耗占比</h2><p class="panel-sub">按选定时段的已用额度</p></div></div>
+          <div class="donut-wrap">
+            <svg id="donut" viewBox="0 0 200 200" width="190" height="190"></svg>
+            <div class="donut-list" id="donut-list"></div>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-head"><div><h2>模型消耗 Top</h2><p class="panel-sub" id="topmodel-sub">选定站点合计</p></div></div>
+          <div class="bars" id="model-bars"></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- 单站点详情 -->
+    <section class="view hidden" id="view-detail">
+      <div class="detail-head">
+        <button class="btn ghost" id="btn-detail-back">
+          <svg viewBox="0 0 20 20" width="15" height="15"><path d="M12.5 5l-5 5 5 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          返回总览
+        </button>
+        <div class="detail-title">
+          <h2 id="detail-title">—</h2>
+          <p class="panel-sub" id="detail-sub"></p>
+        </div>
+        <button class="btn ghost" id="btn-detail-open">打开平台 ↗</button>
+      </div>
+      <div id="detail-content"></div>
+    </section>
+
+    <!-- 站点管理 -->
+    <section class="view hidden" id="view-sites">
+      <div class="two-col settings-col">
+        <div class="panel">
+          <div class="panel-head">
+            <div><h2>站点列表</h2><p class="panel-sub" id="sites-sub">共 0 个站点</p></div>
+            <button class="btn primary sm" id="btn-add-site">+ 添加站点</button>
+          </div>
+          <div class="site-list" id="site-list"></div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-head"><div><h2>全局设置</h2><p class="panel-sub">默认值，可在单个站点中覆盖</p></div></div>
+          <div class="form" id="settings-form">
+            <label class="field">
+              <span class="label">默认充值比 <em>¥ / $</em></span>
+              <input type="number" id="set-cny" step="0.1" min="0.1" placeholder="7.2">
+              <span class="hint">1 美元额度 = 多少元人民币。多数站点会在 <code>/api/status</code> 暴露此值并自动识别；这里只填未暴露站点的兜底默认</span>
+            </label>
+            <label class="field">
+              <span class="label">低余额告警阈值 <em>USD</em></span>
+              <input type="number" id="set-low" step="0.5" placeholder="2">
+              <span class="hint">站点余额低于这个数时，总览卡片会标橙并计入「告警」</span>
+            </label>
+            <label class="field">
+              <span class="label">请求超时 <em>秒</em></span>
+              <input type="number" id="set-timeout" step="1" placeholder="15">
+              <span class="hint">探测单个接口的等待上限。网络慢可以调到 20~30</span>
+            </label>
+            <div class="form-actions">
+              <button class="btn primary" id="btn-save-settings">保存设置</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <span>API Hub · 本地运行，数据只存在这台电脑上</span>
+    <span id="foot-status"></span>
+  </footer>
+</div>
+
+<div class="toast-wrap" id="toast-wrap"></div>
+<div class="modal-backdrop hidden" id="modal-backdrop">
+  <div class="modal" id="modal"></div>
+</div>
+<input type="file" id="file-input" accept=".json" hidden>
+
+<script src="/app.js"></script>
+</body>
+</html>

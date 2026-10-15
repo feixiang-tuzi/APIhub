@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        python-version: ["3.9", "3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Show Python version
+        run: python --version
+
+      - name: Run backend self-test
+        working-directory: ${{ github.workspace }}
+        env:
+          PYTHONPATH: .
+        run: python tests/selftest.py
+
+      - name: Check frontend syntax (smartparse parser)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Validate app.js syntax
+        run: node --check web/app.js
+
+      - name: Run smartparse tests
+        run: node tests/smartparse.test.js
