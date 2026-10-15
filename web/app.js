@@ -65,9 +65,9 @@ function fmtUsd(n, d = 2) {
 }
 
 // 取站点的充值比（1 USD 额度 = 多少元人民币）：
-// 站点手动填 > 站点 /api/status 自动识别 > 全局设置 > 默认 7.2
+// 站点手动填 > 站点 /api/status 自动识别 > 全局设置 > 默认 1
 function cnyOf(s) {
-  return Number(s?.usd_cny) || Number(state.settings.usd_cny) || 7.2;
+  return Number(s?.usd_cny) || Number(state.settings.usd_cny) || 1;
 }
 // ¥X（主显示）—— 已按充值比换算
 function fmtCny(usd, s) {
@@ -83,7 +83,7 @@ function fmtUsdSub(usd, d = 2) {
 
 function fmtMoney(v) {
   if (v == null || isNaN(v)) return '—';
-  return state.usageCny ? '¥' + (v * (state.settings.usd_cny || 7.2)).toFixed(2)
+  return state.usageCny ? '¥' + (v * (state.settings.usd_cny || 1)).toFixed(2)
                         : '$' + Number(v).toFixed(3);
 }
 
@@ -210,16 +210,29 @@ async function loadSnapshot() {
   state.snapshots = r.snapshots || [];
 }
 
+// 轮询快照直到后台探测结束：期间每 1.5s 拉一次，卡片陆续刷新，而不是干等全部完成
+async function pollSnapshots(maxMs = 300000) {
+  const t0 = Date.now();
+  let refreshing = true;
+  while (refreshing && Date.now() - t0 < maxMs) {
+    const r = await api('/api/snapshot');
+    state.snapshots = r.snapshots || [];
+    renderAll();
+    refreshing = !!r.refreshing;
+    if (refreshing) await new Promise(res => setTimeout(res, 1500));
+  }
+  return !refreshing;
+}
+
 async function refreshAll(ids) {
   if (state.loading) return;
   state.loading = true;
   setLive('loading');
   $('#btn-refresh').disabled = true;
   try {
-    const body = { ids: ids || null };
-    const r = await api('/api/refresh', { method: 'POST', body: JSON.stringify(body) });
-    await loadSnapshot();
-    renderAll();
+    // 探测在后台执行，接口立即返回；这里轮询渐进更新界面
+    await api('/api/refresh', { method: 'POST', body: JSON.stringify({ ids: ids || null }) });
+    await pollSnapshots();
     toast(ids ? '已刷新 1 个站点' : `已刷新 ${state.snapshots.length} 个站点`, 'ok');
   } catch (e) {
     toast('刷新失败：' + e.message, 'err');
@@ -255,7 +268,7 @@ function renderStats() {
   });
   models = modelSet.size;
 
-  const cny = state.settings.usd_cny || 7.2;
+  const cny = state.settings.usd_cny || 1;
   const cards = [
     {
       label: '总余额', color: 'var(--mint)', soft: 'var(--mint-soft)',
@@ -325,7 +338,7 @@ function renderDetail(id) {
   $('#detail-sub').textContent = `${(s.base_url || '').replace(/^https?:\/\//, '')} · ${modeLabel(s.mode)}`;
 
   const th = state.settings.low_balance_usd ?? 2;
-  const cny = state.settings.usd_cny || 7.2;
+  const cny = state.settings.usd_cny || 1;
   const down = !s.ok;
   const isLow = s.balance_usd != null && s.balance_usd < th;
   const totalTokens = s.token_usage ? s.token_usage.total : null;
@@ -612,7 +625,7 @@ function drawDetailChart(s) {
     const reqs = days.reduce((a, d) => a + (d.requests || 0), 0);
     rangeSub.textContent = `最近 ${days.length} 天 · 合计 ${fmtUsd(total / q, 4)} · ${reqs} 次请求`;
   }
-  const cv = state.usageCny ? (state.settings.usd_cny || 7.2) : 1;
+  const cv = state.usageCny ? (state.settings.usd_cny || 1) : 1;
   const pre = state.usageCny ? '¥' : '$';
   const vals = days.map(d => (d.quota || 0) / q * cv);
   const maxV = Math.max(0.0001, ...vals);
@@ -648,7 +661,7 @@ function renderDetailBars(s) {
   const host = $('#d-model-bars');
   if (!host) return;
   const q = detailQpu(s);
-  const cv = state.usageCny ? (state.settings.usd_cny || 7.2) : 1;
+  const cv = state.usageCny ? (state.settings.usd_cny || 1) : 1;
   const pre = state.usageCny ? '¥' : '$';
   const rows = (s.usage_by_model || []).map(m => ({ model: m.model, usd: (m.quota || 0) / q, requests: m.requests }))
     .sort((a, b) => b.usd - a.usd).slice(0, 15);
@@ -675,7 +688,7 @@ function renderDetailDays(s) {
   const host = $('#d-days');
   if (!host) return;
   const q = detailQpu(s);
-  const cv = state.usageCny ? (state.settings.usd_cny || 7.2) : 1;
+  const cv = state.usageCny ? (state.settings.usd_cny || 1) : 1;
   const pre = state.usageCny ? '¥' : '$';
   const scope = tailDays(s.usage_by_day, detailDays());
   const days = [...scope].reverse().filter(d => (d.quota || 0) > 0 || (d.requests || 0) > 0);
@@ -762,7 +775,7 @@ function sortSites(list) {
 // 单个站点的派生展示字段，卡片和列表共用
 function siteView(s) {
   const th = state.settings.low_balance_usd ?? 2;
-  const cny = state.settings.usd_cny || 7.2;
+  const cny = state.settings.usd_cny || 1;
   const bal = s.balance_usd;
   const isLow = bal != null && bal < th;
   const down = !s.ok;
@@ -1113,7 +1126,7 @@ function drawLineChart() {
   nice.ticks.forEach(t => {
     const yy = y(t);
     out += `<line x1="${pad.l}" y1="${yy.toFixed(1)}" x2="${W - pad.r}" y2="${yy.toFixed(1)}" stroke="#eef3f8" stroke-width="1"/>`;
-    out += `<text x="${pad.l - 8}" y="${(yy + 3.5).toFixed(1)}" text-anchor="end" fill="#a3b1c0" font-size="10.5" font-family="inherit">${state.usageCny ? '¥' + (t * (state.settings.usd_cny || 7.2)).toFixed(1) : '$' + t.toFixed(2)}</text>`;
+    out += `<text x="${pad.l - 8}" y="${(yy + 3.5).toFixed(1)}" text-anchor="end" fill="#a3b1c0" font-size="10.5" font-family="inherit">${state.usageCny ? '¥' + (t * (state.settings.usd_cny || 1)).toFixed(1) : '$' + t.toFixed(2)}</text>`;
   });
 
   // x 轴标签
@@ -1157,7 +1170,7 @@ function drawLineChart() {
     });
     g.innerHTML = h;
 
-    const cv = state.usageCny ? (state.settings.usd_cny || 7.2) : 1;
+    const cv = state.usageCny ? (state.settings.usd_cny || 1) : 1;
     const pre = state.usageCny ? '¥' : '$';
     const lines = series
       .map(s => ({ n: s.name, c: s.color, v: s.values[idx] * cv }))
@@ -1219,7 +1232,7 @@ function renderDonut() {
     a0 = a1;
   });
 
-  const cv = state.usageCny ? (state.settings.usd_cny || 7.2) : 1;
+  const cv = state.usageCny ? (state.settings.usd_cny || 1) : 1;
   const pre = state.usageCny ? '¥' : '$';
   out += `<text x="100" y="96" text-anchor="middle" fill="#8a9bad" font-size="10.5" font-family="inherit">合计已用</text>`;
   out += `<text x="100" y="115" text-anchor="middle" fill="#22303f" font-size="16" font-weight="600" font-family="inherit">${pre}${(total * cv).toFixed(2)}</text>`;
@@ -1249,7 +1262,7 @@ function renderModelBars() {
   const rows = Array.from(agg.values()).sort((a, b) => b.usd - a.usd).slice(0, 20);
   const max = Math.max(0.0001, ...rows.map(r => r.usd));
 
-  const cv = state.usageCny ? (state.settings.usd_cny || 7.2) : 1;
+  const cv = state.usageCny ? (state.settings.usd_cny || 1) : 1;
   const pre = state.usageCny ? '¥' : '$';
 
   $('#topmodel-sub').textContent = `${visibleSites().length} 个站点 · 累计全部历史（模型明细不支持按天切分）· Top ${rows.length}`;
@@ -1289,7 +1302,7 @@ function renderSiteList() {
 function renderSettings() {
   const s = state.settings;
   const cny = $('#set-cny');
-  if (cny) cny.value = s.usd_cny ?? 7.2;
+  if (cny) cny.value = s.usd_cny ?? 1;
   const low = $('#set-low');
   if (low) low.value = s.low_balance_usd ?? 2;
   const to = $('#set-timeout');
@@ -1529,7 +1542,7 @@ function siteForm(site) {
     return `<label class="field${hint ? ' full' : ''}">
       <span class="label">${hint || ''}</span>
       <span class="pw-wrap">
-        <input type="password" id="${id}" value="${esc(val || '')}" placeholder="${ph}">
+        <input type="text" class="secret" id="${id}" value="${esc(val || '')}" placeholder="${ph}" autocomplete="off" spellcheck="false" autocapitalize="off">
         <button class="pw-eye${has ? '' : ' hidden'}" type="button" data-eye="${id}" title="查看内容" aria-label="查看内容">
           <svg class="eye-off" viewBox="0 0 20 20" width="16" height="16"><path d="M3 10s2.6-4.4 7-4.4S17 10 17 10s-2.6 4.4-7 4.4S3 10 3 10z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="10" r="1.9" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3.6 3.6l12.8 12.8" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/></svg>
           <svg class="eye-on hidden" viewBox="0 0 20 20" width="16" height="16"><path d="M3 10s2.6-4.4 7-4.4S17 10 17 10s-2.6 4.4-7 4.4S3 10 3 10z" fill="none" stroke="currentColor" stroke-width="1.5"/><circle cx="10" cy="10" r="1.9" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>
@@ -1613,14 +1626,16 @@ function siteForm(site) {
 }
 
 // 「闭眼 / 睁眼」切换敏感字段的显示
+// 注意：凭证框故意用 type=text + CSS 圆点遮罩（-webkit-text-security），
+// 若改成 type=password，浏览器会把保存表单当登录，每次保存都弹「是否保存密码」
 function bindEyeToggles(scope) {
   $$('[data-eye]', scope || document).forEach(btn => {
     btn.classList.remove('hidden');
     btn.onclick = () => {
       const inp = $('#' + btn.dataset.eye);
       if (!inp) return;
-      const show = inp.type === 'password';
-      inp.type = show ? 'text' : 'password';
+      const show = !inp.classList.contains('reveal');
+      inp.classList.toggle('reveal', show);
       btn.classList.toggle('on', show);
       btn.title = show ? '隐藏内容' : '查看内容';
       $$('.eye-off', btn).forEach(s => s.classList.toggle('hidden', show));
@@ -1743,20 +1758,24 @@ async function saveSiteForm(id, closeAfter) {
     const r = await api('/api/sites', { method: 'POST', body: JSON.stringify(payload) });
     if (r.error) throw new Error(r.error);
     await loadConfig();
-    await loadSnapshot();
     renderAll();
     if (closeAfter) closeModal();
-    const snap = (r.snapshots || [])[0];
-    if (snap && snap.ok) {
-      toast(`已保存并探测成功（${modeLabel(snap.mode)}，${snap.model_count} 个模型）`, 'ok');
-    } else if (snap) {
-      toast('已保存，但探测未完全成功，点卡片上的 ⓘ 看详情', 'warn');
-    } else {
-      toast('已保存', 'ok');
-    }
+    btn.disabled = false;
+    toast('已保存，正在后台探测…', 'ok');
+    // 探测在后台线程进行，这里轮询快照：卡片陆续更新，完成后通知探测结果
+    (async () => {
+      try {
+        await pollSnapshots();
+        const snap = state.snapshots.find(s => s.id === r.id);
+        if (snap && snap.ok) {
+          toast(`探测成功（${modeLabel(snap.mode)}，${snap.model_count} 个模型）`, 'ok');
+        } else if (snap) {
+          toast('探测未完全成功，点卡片上的 ⓘ 看详情', 'warn');
+        }
+      } catch (e) { /* 保存本身已成功，轮询异常不再打扰用户 */ }
+    })();
   } catch (e) {
     toast('保存失败：' + e.message, 'err');
-  } finally {
     btn.disabled = false;
   }
 }
@@ -2132,7 +2151,7 @@ function bind() {
   // 设置
   $('#btn-save-settings').onclick = async () => {
     const payload = {
-      usd_cny: Number($('#set-cny').value) || 7.2,
+      usd_cny: Number($('#set-cny').value) || 1,
       low_balance_usd: Number($('#set-low').value) || 0,
       timeout: Number($('#set-timeout').value) || 15,
     };

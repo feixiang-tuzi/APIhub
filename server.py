@@ -32,7 +32,7 @@ import webbrowser
 import urllib.error
 import urllib.parse
 import urllib.request
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
@@ -46,7 +46,7 @@ CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
 CACHE_PATH = os.path.join(DATA_DIR, "snapshot.json")
 
 DEFAULT_QUOTA_PER_USD = 500000  # New API 默认 1 USD = 500000 quota
-DEFAULT_USD_CNY = 7.2          # 默认充值比：1 美元额度 = 7.2 元人民币（仅当站点未在 /api/status 暴露时使用）
+DEFAULT_USD_CNY = 1.0          # 默认充值比：1 美元额度 = 多少元人民币（仅当站点未在 /api/status 暴露时使用；设 1 即等值显示）
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 # 探测时一次性抓取的历史天数上限；界面上的「时间范围」切换都从这里取子集
 LOG_FETCH_DAYS = 120
@@ -65,6 +65,38 @@ DEFAULT_SETTINGS = {
 CONFIG_LOCK = threading.Lock()
 CACHE = {}  # site_id -> snapshot dict
 CACHE_LOCK = threading.Lock()
+
+# 刷新任务调度：探测改在后台线程执行，HTTP 立即返回，前端轮询 /api/snapshot 渐进更新。
+REFRESH_LOCK = threading.Lock()     # 串行化刷新任务（全局刷新与单站探测排队执行，不并发）
+PROBE_ACTIVE = 0                    # 正在执行（含排队等待）的探测任务数，>0 时前端继续轮询
+PROBE_STATE_LOCK = threading.Lock()
+
+
+def _probe_end():
+    global PROBE_ACTIVE
+    with PROBE_STATE_LOCK:
+        PROBE_ACTIVE -= 1
+
+
+def start_refresh(ids=None):
+    """在后台线程执行一次刷新，立即返回。排队上限 2 个，超出则忽略（防连点堆积）。"""
+    global PROBE_ACTIVE
+    with PROBE_STATE_LOCK:
+        if PROBE_ACTIVE >= 3:
+            return False
+        PROBE_ACTIVE += 1
+    threading.Thread(target=_refresh_task, args=(ids,), daemon=True).start()
+    return True
+
+
+def _refresh_task(ids):
+    try:
+        with REFRESH_LOCK:
+            refresh_all(ids)
+    except Exception as e:
+        print("  [refresh] 后台刷新异常: %s" % e)
+    finally:
+        _probe_end()
 
 # 供连通性测试等需要"随时查站点/设置"的场景使用（每次刷新配置时更新）
 SITE_INDEX = {}  # site_id -> site dict
@@ -1463,32 +1495,33 @@ def refresh_all(only_ids=None):
         return []
     results = []
     workers = max(1, min(int(settings.get("concurrency") or 8), len(sites)))
+    empty_snap = lambda s: {
+        "id": s.get("id"),
+        "name": s.get("name") or s.get("base_url"),
+        "base_url": s.get("base_url"),
+        "enabled": s.get("enabled", True),
+        "note": s.get("note") or "",
+        "ok": False,
+        "mode": None,
+        "probed_at": now_ts(),
+        "errors": [],
+        "models": [],
+        "model_count": 0,
+        "debug": {},
+    }
     with ThreadPoolExecutor(max_workers=workers) as ex:
         futs = {ex.submit(probe_site, s, settings): s for s in sites}
-        for f in futs:
+        # 渐进式更新：每完成一个站点就立刻写入缓存，
+        # 前端轮询 /api/snapshot 时能看到卡片陆续刷新，而不是全部探测完才有响应
+        for f in as_completed(futs):
             try:
-                results.append(f.result(timeout=90))
+                r = f.result(timeout=90)
             except Exception as e:
-                s = futs[f]
-                results.append(
-                    {
-                        "id": s.get("id"),
-                        "name": s.get("name") or s.get("base_url"),
-                        "base_url": s.get("base_url"),
-                        "enabled": s.get("enabled", True),
-                        "note": s.get("note") or "",
-                        "ok": False,
-                        "mode": None,
-                        "probed_at": now_ts(),
-                        "errors": [str(e)],
-                        "models": [],
-                        "model_count": 0,
-                        "debug": {},
-                    }
-                )
-    with CACHE_LOCK:
-        for r in results:
-            CACHE[r["id"]] = r
+                r = empty_snap(futs[f])
+                r["errors"] = [str(e)]
+            results.append(r)
+            with CACHE_LOCK:
+                CACHE[r["id"]] = r
     save_cache()
 
     # 刷新令牌被站点轮换过、或 Cookie 自动续期拿到了新 session 的，落盘保证下次可用。
@@ -1610,7 +1643,9 @@ class Handler(BaseHTTPRequestHandler):
                     wanted = set(with_ids[0].split(","))
                     data = [d for d in data if d.get("id") in wanted]
                 data.sort(key=lambda x: (x.get("name") or ""))
-                return self.send_json({"snapshots": data, "server_time": now_ts()})
+                with PROBE_STATE_LOCK:
+                    refreshing = PROBE_ACTIVE > 0
+                return self.send_json({"snapshots": data, "server_time": now_ts(), "refreshing": refreshing})
 
             if path == "/api/sites":
                 cfg = read_config()
@@ -1687,9 +1722,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"ok": True, "settings": cfg["settings"]})
 
             if path == "/api/refresh":
-                ids = body.get("ids")
-                res = refresh_all(ids)
-                return self.send_json({"ok": True, "snapshots": res})
+                # 探测在后台线程执行，立即返回；前端轮询 /api/snapshot 渐进更新
+                started = start_refresh(body.get("ids"))
+                return self.send_json({"ok": True, "started": started})
 
             if path == "/api/test-models":
                 return self.send_json(test_models(body))
@@ -1793,8 +1828,10 @@ class Handler(BaseHTTPRequestHandler):
                 if "user_id" in body:
                     found["user_id"] = str(body.get("user_id") or "").strip()
             write_config(cfg)
-        res = refresh_all([sid])
-        return self.send_json({"ok": True, "id": sid, "snapshots": res})
+        # 探测放后台：保存立即返回（写配置很快，探测要打站点多个接口、可能几十秒），
+        # 前端收到 probing=true 后轮询快照，探测完成自动更新卡片
+        start_refresh([sid])
+        return self.send_json({"ok": True, "id": sid, "probing": True})
 
     def delete_site(self, sid):
         with CONFIG_LOCK:
@@ -1847,12 +1884,10 @@ def main():
     httpd.daemon_threads = True
 
     if n:
-        def bg():
-            time.sleep(0.6)
-            print("\n[启动] 正在刷新 %d 个站点的数据..." % n)
-            refresh_all()
-            print("[启动] 刷新完成\n")
-        threading.Thread(target=bg, daemon=True).start()
+        # 走统一的任务调度：计入 PROBE_ACTIVE，前端轮询 /api/snapshot
+        # 能感知「启动探测还在进行」，不会提前结束刷新动画
+        print("\n[启动] 正在后台刷新 %d 个站点的数据..." % n)
+        start_refresh()
 
     if not args.no_open:
         threading.Timer(0.8, lambda: webbrowser.open(url)).start()
