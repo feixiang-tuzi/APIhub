@@ -1589,6 +1589,7 @@ class Handler(BaseHTTPRequestHandler):
             if path == "/api/config":
                 cfg = read_config()
                 out = dict(cfg)
+                out["base_dir"] = BASE_DIR  # 页面标注运行目录，防多副本混淆
                 out["sites"] = []
                 for s in cfg["sites"]:
                     t = dict(s)
@@ -1641,7 +1642,9 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send_json({"error": "site not found"}, 404)
 
             if path == "/api/health":
-                return self.send_json({"ok": True, "time": now_ts()})
+                # base_dir 用于在页面上标明「本页面由哪个文件夹的程序提供」，
+                # 避免本机多份副本共存时混淆数据来源
+                return self.send_json({"ok": True, "time": now_ts(), "base_dir": BASE_DIR})
 
             # ---- 静态文件 ----
             if path == "/" or path == "":

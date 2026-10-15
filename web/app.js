@@ -201,6 +201,8 @@ async function loadConfig() {
   const cfg = await api('/api/config');
   state.sites = cfg.sites || [];
   state.settings = cfg.settings || {};
+  const bd = document.getElementById('run-dir');
+  if (bd && cfg.base_dir) bd.textContent = '程序目录：' + cfg.base_dir;
 }
 
 async function loadSnapshot() {
