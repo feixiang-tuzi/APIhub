@@ -21,6 +21,8 @@
 ## 环境要求
 
 - **Python 3.8+**（唯一依赖。只用标准库，**不需要 pip install 任何东西**）
+> 若提示找不到 Python，去 <https://www.python.org/downloads/> 装一个，
+> 安装时记得勾选 **Add Python to PATH**。
 - Windows / macOS / Linux 均可
 - 现代浏览器（Chrome / Edge / Firefox）
 
@@ -44,8 +46,6 @@ python server.py --port 8800
 启动后浏览器打开 <http://127.0.0.1:8765/>，切到 **站点管理 → 添加站点**，
 填 Base URL + 密钥，保存即自动探测。关闭：在命令行窗口按 `Ctrl+C`。
 
-> 若提示找不到 Python，去 <https://www.python.org/downloads/> 装一个，
-> 安装时记得勾选 **Add Python to PATH**。
 
 ---
 
