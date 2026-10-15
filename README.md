@@ -27,6 +27,9 @@
 ---
 
 ## 快速开始
+>点绿色的 Code 按钮
+>选 Download ZIP
+>解压后就能用
 
 **Windows**：双击 **`start.bat`**
 
