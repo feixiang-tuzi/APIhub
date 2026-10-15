@@ -279,9 +279,9 @@ function renderStats() {
   ];
 
   $('#stats').innerHTML = cards.map((c, i) => {
-    // 前三张（总余额 / 累计已用 / 告警异常）点开去总览；可用模型去模型矩阵
-    const goto = i < 3 ? 'overview' : 'models';
-    const title = i < 3 ? '点击查看总览' : '点击查看模型矩阵';
+    // 总余额 / 累计已用 / 告警异常 点开去总览；可用模型去模型矩阵
+    const goto = c.label === '可用模型' ? 'models' : 'overview';
+    const title = goto === 'models' ? '点击查看模型矩阵' : '点击查看总览';
     return `
     <div class="stat clickable" data-goto="${goto}" title="${title}" style="--accent-soft:${c.soft}">
       <div class="stat-label"><span style="width:7px;height:7px;border-radius:50%;background:${c.color};display:inline-block"></span>${c.label}</div>
