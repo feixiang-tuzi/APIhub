@@ -22,6 +22,7 @@ import io
 import json
 import os
 import re
+import socket
 import ssl
 import sys
 import threading
@@ -1809,6 +1810,19 @@ def main():
     ap.add_argument("--no-open", action="store_true")
     args = ap.parse_args()
 
+    url = "http://127.0.0.1:%d/" % args.port
+
+    # 防重复启动：若端口已有实例在监听（Windows 下 SO_REUSEADDR 允许二次绑定，
+    # 会导致两个实例静默共用端口、页面连到错误实例），则只打开页面，不再启动。
+    try:
+        with socket.create_connection(("127.0.0.1", args.port), timeout=0.5):
+            print("[提示] API Hub 已在运行，不重复启动。页面地址：%s" % url)
+            if not args.no_open:
+                webbrowser.open(url)
+            return
+    except OSError:
+        pass
+
     load_cache()
     os.makedirs(DATA_DIR, exist_ok=True)
     if not os.path.exists(CONFIG_PATH):
@@ -1817,7 +1831,6 @@ def main():
     cfg = read_config()
     n = len([s for s in cfg["sites"] if s.get("enabled", True)])
 
-    url = "http://127.0.0.1:%d/" % args.port
     print("=" * 58)
     print("  API Hub - 多中转站聚合面板")
     print("=" * 58)
