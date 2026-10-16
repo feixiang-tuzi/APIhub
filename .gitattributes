@@ -1,0 +1,18 @@
+# 统一换行符策略
+# 仓库内一律使用 LF：跨平台项目必须如此，否则 start.sh 在 Linux/macOS 上会
+# 因为 CRLF 报 "/bin/bash^M: bad interpreter"，CI 也会出现整文件 diff 噪音。
+* text=auto eol=lf
+
+# Windows 批处理脚本用 CRLF，避免个别 cmd.exe 版本解析异常
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+*.zip binary

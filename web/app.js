@@ -1738,14 +1738,20 @@ async function saveSiteForm(id, closeAfter) {
   const payload = {
     name: $('#f-name').value.trim(),
     base_url: $('#f-url').value.trim(),
-    api_key: $('#f-key').value,
-    access_token: $('#f-token').value,
-    session: $('#f-session').value,
     user_id: $('#f-uid').value.trim(),
     note: $('#f-note').value.trim(),
     enabled: $('#f-enabled').checked,
     insecure_ssl: $('#f-insecure').checked,
   };
+  // 敏感凭证只在「确实填了值」时才提交：留空 = 保持原值不变。
+  // 不提交空串，避免异步回填未完成/接口异常时把已存凭证覆盖掉。
+  const vKey = $('#f-key').value.trim();
+  if (vKey) payload.api_key = vKey;
+  const vTok = $('#f-token').value.trim();
+  if (vTok) payload.access_token = vTok;
+  const vSess = $('#f-session').value.trim();
+  if (vSess) payload.session = vSess;
+
   const cnyVal = $('#f-cny') ? $('#f-cny').value.trim() : '';
   payload.usd_cny = cnyVal ? Number(cnyVal) : null;   // 留空表示用全局或自动识别
   if (id) payload.id = id;
@@ -1788,8 +1794,13 @@ function openSiteForm(id) {
   bindEyeToggles($('#modal'));
   $('#f-save').onclick = () => saveSiteForm(id, true);
   $('#f-test').onclick = () => saveSiteForm(id, false);
-  // 列表接口出于安全只回掩码，编辑时再单独取一次明文填进输入框（仍是闭眼掩码显示）
+  // 编辑态：凭证明文要单独拉一次（列表接口出于安全只回掩码）。
+  // 回填期间先禁用保存/测试——否则用户在明文到达前点保存，会以空值提交。
   if (site) {
+    const btnSave = $('#f-save'), btnTest = $('#f-test');
+    if (btnSave) btnSave.disabled = true;
+    if (btnTest) btnTest.disabled = true;
+    const done = () => { if (btnSave) btnSave.disabled = false; if (btnTest) btnTest.disabled = false; };
     api('/api/sites/' + site.id + '/credentials').then(r => {
       if (r.error) return;
       const put = (sel, v) => { const el = $(sel); if (el && v) el.value = v; };
@@ -1797,8 +1808,8 @@ function openSiteForm(id) {
       put('#f-token', r.access_token);
       put('#f-session', r.session);
       bindEyeToggles($('#modal'));
-    }).catch(() => {});
-    // 充值比回填：state.sites 来自 /api/config（含 usd_cny 字段），编辑态填进输入框
+    }).catch(() => {}).finally(done);
+    // 充值比在 /api/config 里就有，同步回填，不存在竞态
     const cnyInput = $('#f-cny');
     if (cnyInput && site.usd_cny != null) cnyInput.value = site.usd_cny;
   }

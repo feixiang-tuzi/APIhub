@@ -37,6 +37,18 @@ from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 # --------------------------------------------------------------------------
+# 控制台编码兜底
+# --------------------------------------------------------------------------
+# 英文版 Windows 的控制台/管道默认编码是 cp1252，非中文 Windows 是 GBK；
+# 只要 print 中文就会抛 UnicodeEncodeError，导致程序启动即崩。
+# 这里统一把标准输出与标准错误强制为 UTF-8（errors=replace 保证绝不因编码中断）。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
+# --------------------------------------------------------------------------
 # 路径与常量
 # --------------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -65,6 +77,24 @@ DEFAULT_SETTINGS = {
 CONFIG_LOCK = threading.Lock()
 CACHE = {}  # site_id -> snapshot dict
 CACHE_LOCK = threading.Lock()
+
+
+def _safe_num(*candidates):
+    """按顺序取第一个能转成正数的候选值，否则返回 None。
+
+    用于 quota_per_usd / usd_cny 这类配置：config.json 是手可编辑的，
+    可能出现字符串、null、0 或负数，直接参与运算会 TypeError/除零。
+    """
+    for c in candidates:
+        if c is None or isinstance(c, bool):
+            continue
+        try:
+            v = float(c)
+        except (TypeError, ValueError):
+            continue
+        if v > 0:
+            return v
+    return None
 
 # 刷新任务调度：探测改在后台线程执行，HTTP 立即返回，前端轮询 /api/snapshot 渐进更新。
 REFRESH_LOCK = threading.Lock()     # 串行化刷新任务（全局刷新与单站探测排队执行，不并发）
@@ -981,8 +1011,12 @@ def fetch_logs(root, st, debug, hdrs, days=14):
 def probe_site(site, settings):
     """探测单个站点，返回快照 dict。"""
     st = settings
-    qpu = site.get("quota_per_usd") or st["quota_per_usd"] or DEFAULT_QUOTA_PER_USD
-    cny = site.get("usd_cny") or st["usd_cny"] or DEFAULT_USD_CNY
+    # 数值配置统一走安全转换：config.json 可能被手改成字符串 / null / 0，
+    # 直接参与运算会 TypeError 或除零，这里全部兜底到默认值。
+    qpu = int(_safe_num(site.get("quota_per_usd"), st.get("quota_per_usd"), DEFAULT_QUOTA_PER_USD))
+    cny = _safe_num(site.get("usd_cny"), st.get("usd_cny"), DEFAULT_USD_CNY)
+    # 站点是否手动填过充值比（可能是数字或字符串，不能直接 .strip()）
+    has_manual_cny = site.get("usd_cny") not in (None, "") and str(site.get("usd_cny")).strip() != ""
 
     snap = {
         "id": site.get("id"),
@@ -1006,7 +1040,7 @@ def probe_site(site, settings):
         "used_usd": None,
         "quota_per_usd": qpu,
         "usd_cny": cny,
-        "usd_cny_source": "global",   # global=用全局默认 / auto=从 /api/status 自动识别 / manual=用户手动填
+        "usd_cny_source": "manual" if has_manual_cny else "global",   # manual=站点手动填 / auto=从 /api/status 自动识别 / global=全局默认
         "models": [],
         "model_count": 0,
         "tokens": [],
@@ -1050,7 +1084,8 @@ def probe_site(site, settings):
         # 充值比（1 USD 额度 = N 元人民币）自动识别：
         # 兼容 one-api / new-api 的 price、stripe_unit_price，以及 done-hub / one-hub 的 PaymentUSDRate
         # 仅当站点没有手动填 usd_cny 时才采用自动识别值，避免覆盖用户设置
-        if not (site.get("usd_cny") or "").strip():
+        # 仅在站点未手动填充值比时，才采用 /api/status 自动识别的值
+        if not has_manual_cny:
             for k in ("price", "stripe_unit_price", "PaymentUSDRate", "payment_usd_rate"):
                 v = status_data.get(k)
                 if isinstance(v, (int, float)) and v > 0:
@@ -1784,9 +1819,12 @@ class Handler(BaseHTTPRequestHandler):
             cfg = read_config()
             site = body or {}
             sid = site.get("id")
+            # ⚠️ api_key / access_token / session 三个敏感字段【不能】放进本列表：
+            # 这里是无条件覆盖，而前端表单未改动时会提交空串，会把已存凭证清空。
+            # 它们单独在下方走「为空表示不修改」分支。
             fields = [
                 "name", "base_url", "quota_per_usd", "usd_cny",
-                "enabled", "note", "user_id", "insecure_ssl", "session",
+                "enabled", "note", "user_id", "insecure_ssl",
             ]
             if not sid:
                 sid = uuid.uuid4().hex[:10]
@@ -1818,13 +1856,12 @@ class Handler(BaseHTTPRequestHandler):
                 for k in fields:
                     if k in body:
                         found[k] = body[k]
-                # 密钥：为空表示不修改
-                if body.get("api_key"):
-                    found["api_key"] = body["api_key"].strip()
-                if body.get("access_token"):
-                    found["access_token"] = body["access_token"].strip()
-                if body.get("session"):
-                    found["session"] = body["session"].strip()
+                # 敏感凭证：留空 = 保持原值不变，只有填了新值才覆盖。
+                # （编辑站点时必须这样处理，否则「只改备注」也会把凭证清掉）
+                for secret_key in ("api_key", "access_token", "session"):
+                    val = (body.get(secret_key) or "").strip()
+                    if val:
+                        found[secret_key] = val
                 if "user_id" in body:
                     found["user_id"] = str(body.get("user_id") or "").strip()
             write_config(cfg)

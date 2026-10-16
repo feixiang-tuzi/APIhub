@@ -6,6 +6,14 @@ import sys
 import threading
 import urllib.request
 
+# 控制台编码兜底：英文版 Windows（cp1252）下 print 中文会 UnicodeEncodeError，
+# 导致 CI 在 windows-latest 矩阵上整组失败。强制 UTF-8 并允许替换字符。
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, ROOT)
@@ -275,6 +283,64 @@ def main():
     check("限定非流式时只支持流式的模型会失败", r2["results"][0]["ok"] is False, r2["results"][0].get("error"))
     r3 = server.test_models({"items": [{"site_id": "t-full", "model": "gpt-4o"}], "mode": "stream"})
     check("限定流式时普通模型也判连通", r3["results"][0]["ok"] is True, r3["results"][0].get("error"))
+
+    print("\n=== 15. 编辑站点不丢凭证（回归：曾把 session 无条件清空）===")
+    # 用一个临时配置文件，避免污染真实 config.json；并屏蔽后台探测（域名是假的，会白等）
+    _orig_cfg_path = server.CONFIG_PATH
+    _orig_start_refresh = server.start_refresh
+    server.CONFIG_PATH = os.path.join(server.DATA_DIR, "_selftest_cfg.json")
+    server.start_refresh = lambda ids=None: None
+
+    class _FakeHandler:
+        def send_json(self, obj, code=200):
+            return obj
+
+    _h = _FakeHandler()
+    try:
+        server.write_config({"settings": dict(server.DEFAULT_SETTINGS), "sites": []})
+        server.Handler.upsert_site(_h, {
+            "name": "凭证站", "base_url": "https://cred.example.com",
+            "api_key": "sk-orig", "access_token": "tok-orig",
+            "session": "session=ORIG", "user_id": "4004",
+        })
+        _sid = server.read_config()["sites"][0]["id"]
+
+        # ① 只改备注（新前端行为：不提交空凭证）
+        server.Handler.upsert_site(_h, {
+            "id": _sid, "name": "凭证站", "base_url": "https://cred.example.com",
+            "user_id": "4004", "note": "只改备注", "enabled": True,
+        })
+        _s = server.read_config()["sites"][0]
+        check("只改备注：session 不丢", _s["session"] == "session=ORIG", repr(_s["session"]))
+        check("只改备注：api_key 不丢", _s["api_key"] == "sk-orig", repr(_s["api_key"]))
+        check("只改备注：access_token 不丢", _s["access_token"] == "tok-orig", repr(_s["access_token"]))
+
+        # ② 旧前端行为：显式提交空串，后端也必须兜住（留空 = 不修改）
+        server.Handler.upsert_site(_h, {
+            "id": _sid, "name": "凭证站", "base_url": "https://cred.example.com",
+            "api_key": "", "access_token": "", "session": "",
+            "user_id": "4004", "enabled": True,
+        })
+        _s = server.read_config()["sites"][0]
+        check("提交空串：session 被兜住", _s["session"] == "session=ORIG", repr(_s["session"]))
+        check("提交空串：api_key 被兜住", _s["api_key"] == "sk-orig", repr(_s["api_key"]))
+
+        # ③ 确实要换凭证时仍能写入
+        server.Handler.upsert_site(_h, {
+            "id": _sid, "name": "凭证站", "base_url": "https://cred.example.com",
+            "session": "session=NEW", "user_id": "4004", "enabled": True,
+        })
+        _s = server.read_config()["sites"][0]
+        check("新凭证能正常写入", _s["session"] == "session=NEW", repr(_s["session"]))
+        check("普通字段可正常修改", _s["note"] == "只改备注", repr(_s["note"]))
+    finally:
+        try:
+            os.remove(server.CONFIG_PATH)
+        except OSError:
+            pass
+        server.CONFIG_PATH = _orig_cfg_path
+        server.start_refresh = _orig_start_refresh
+
     print("  通过 %d 项，失败 %d 项" % (len(PASS), len(FAIL)))
     if FAIL:
         print("  失败项：", FAIL)
