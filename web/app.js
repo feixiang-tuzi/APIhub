@@ -26,8 +26,17 @@ const state = {
   sortKey: 'custom',       // custom | name | balance | used | requests | models | note | status
   sortDir: 1,              // 1 升序 / -1 降序
   siteOrder: (() => {
-    try { return JSON.parse(localStorage.getItem('apihub_site_order') || '[]'); }
-    catch (e) { return []; }
+    try {
+      const raw = JSON.parse(localStorage.getItem('apihub_site_order') || '[]');
+      // 去重：旧版本会把卡片内部按钮的同名 data-id 也收集进来，产生重复项
+      const seen = new Set();
+      return raw.filter(id => {
+        const k = String(id);
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+      });
+    } catch (e) { return []; }
   })(),                    // 自定义顺序（站点 id 数组）
   usageRange: null,        // 用量分析时间范围（天）
   testMode: localStorage.getItem('apihub_test_mode') || 'auto',  // auto | plain | stream
@@ -718,7 +727,13 @@ function overviewSites() {
 
 // 把站点 id 顺序写回本地
 function persistSiteOrder(ids) {
-  state.siteOrder = ids.slice();
+  const seen = new Set();
+  state.siteOrder = ids.filter(id => {
+    const k = String(id);
+    if (seen.has(k)) return false;
+    seen.add(k);
+    return true;
+  });
   try { localStorage.setItem('apihub_site_order', JSON.stringify(state.siteOrder)); } catch (e) {}
 }
 
@@ -862,10 +877,59 @@ function renderCards() {
     renderSiteTable(list);
   } else if (all.length) {
     const custom = state.sortKey === 'custom';
-    grid.innerHTML = list.map(s => {
-      const v = siteView(s);
-      return `
-      <div class="site-card ${v.cls}" style="--band:${siteColor(s.id)}" data-open="${s.id}" data-id="${s.id}" ${custom ? 'draggable="true"' : ''} title="点击查看该站点的模型与用量">
+    if (!list.length) {
+      // 搜索无结果
+      if (!grid.firstElementChild || !grid.firstElementChild.classList.contains('tip-inline')) {
+        const tip = document.createElement('div');
+        tip.className = 'tip-inline';
+        tip.style.padding = '24px 4px';
+        tip.textContent = '没有匹配的站点';
+        grid.replaceChildren(tip);
+      }
+    } else {
+      // 按站点 id 复用已有卡片节点：只更新内容、顺序变化时才移动。
+      // 不再整块重写 innerHTML —— 否则刷新轮询期间会把鼠标悬停中的卡片销毁重建，
+      // 导致 .site-card:hover 的 translateY 过渡反复播放，看起来卡片在「颤抖」。
+      const prev = new Map();
+      for (const el of grid.children) {
+        if (el.classList && el.classList.contains('site-card') && el.dataset.id != null) {
+          prev.set(String(el.dataset.id), el);
+        }
+      }
+      const frag = document.createDocumentFragment();
+      for (const s of list) {
+        const v = siteView(s);
+        const inner = cardInnerHtml(s, v, custom);
+        let card = prev.get(String(s.id));
+        if (card) prev.delete(String(s.id));
+        else {
+          card = document.createElement('div');
+          card.dataset.open = s.id;
+          card.dataset.id = s.id;
+        }
+        card.className = `site-card ${v.cls}`;
+        card.style.setProperty('--band', siteColor(s.id));
+        card.title = '点击查看该站点的模型与用量';
+        if (custom) card.setAttribute('draggable', 'true');
+        else card.removeAttribute('draggable');
+        // 内容未变则跳过内部重写，进一步减少 DOM 变动
+        if (card.__sig !== inner) { card.innerHTML = inner; card.__sig = inner; }
+        frag.appendChild(card);
+      }
+      prev.forEach(el => el.remove());   // 移除已不存在的站点卡片
+      const cur = [...grid.children];
+      const want = [...frag.children];
+      const same = cur.length === want.length && cur.every((el, i) => el === want[i]);
+      if (!same) grid.replaceChildren(frag);   // 移动已有节点，保持元素身份（不重新触发 hover 动画）
+    }
+  }
+
+  $('#sites-sub').textContent = `共 ${all.length} 个站点`;
+}
+
+// 单张站点卡片的内部结构（外层 .site-card 元素由 renderCards 复用，不在这里创建）
+function cardInnerHtml(s, v, custom) {
+  return `
         ${custom ? `<span class="drag-handle" title="拖拽调整顺序"><svg viewBox="0 0 16 16" width="12" height="12"><circle cx="6" cy="4" r="1.2" fill="currentColor"/><circle cx="10" cy="4" r="1.2" fill="currentColor"/><circle cx="6" cy="8" r="1.2" fill="currentColor"/><circle cx="10" cy="8" r="1.2" fill="currentColor"/><circle cx="6" cy="12" r="1.2" fill="currentColor"/><circle cx="10" cy="12" r="1.2" fill="currentColor"/></svg></span>` : ''}
         <div class="sc-top">
           <div class="sc-name">
@@ -884,12 +948,7 @@ function renderCards() {
           ${v.barHidden ? '' : `<div class="sc-bar"><span class="${v.isLow ? 'low' : ''}" style="width:${v.pct}%"></span></div>`}
         </div>
 
-        ${v.noteHtml}
-      </div>`;
-    }).join('') || '<div class="tip-inline" style="padding:24px 4px">没有匹配的站点</div>';
-  }
-
-  $('#sites-sub').textContent = `共 ${all.length} 个站点`;
+        ${v.noteHtml}`;
 }
 
 /* ------------------------------ 列表视图 ------------------------------ */
@@ -1881,9 +1940,12 @@ function visibleOrderIds(container, sel) {
 
 // 把 fromId 移动到 toId 之前 / 之后，并持久化
 function reorderSite(fromId, toId, after) {
+  const isList = state.layout === 'list';
+  // 只取「卡片 / 行」根节点的 data-id：卡片内部的刷新、调试、复制等按钮也带 data-id，
+  // 若一并收集会导致顺序数组出现重复项而被污染。
   const list = visibleOrderIds(
-    state.layout === 'list' ? $('#site-table') : $('#site-grid'),
-    state.layout === 'list' ? 'tr[data-id]' : '[data-id]'
+    isList ? $('#site-table') : $('#site-grid'),
+    isList ? 'tr[data-id]' : '.site-card[data-id]'
   );
   const ids = list.filter(id => id !== fromId);
   const at = ids.indexOf(toId);
@@ -1899,6 +1961,8 @@ function bindDragSort() {
     if (!box || box.dataset.dragBound) return;
     box.dataset.dragBound = '1';
     let dragId = null;
+    // 拖动对象的根节点选择器（卡片 / 表格行），用于排除内部按钮上的同名 data-id
+    const rootSel = box.id === 'site-grid' ? '.site-card[data-id]' : 'tr[data-id]';
 
     const clearMarks = () => {
       $$('.drop-before, .drop-after', box).forEach(el =>
@@ -1906,7 +1970,7 @@ function bindDragSort() {
     };
     // 返回目标元素 + 是否落在后半区（决定插到前还是后）
     const hitTest = (e) => {
-      const el = e.target.closest('[data-id]');
+      const el = e.target.closest(rootSel);
       if (!el) return null;
       const r = el.getBoundingClientRect();
       const horiz = state.layout === 'card';
@@ -1916,7 +1980,7 @@ function bindDragSort() {
 
     box.addEventListener('dragstart', (e) => {
       if (state.sortKey !== 'custom') return;
-      const el = e.target.closest('[data-id]');
+      const el = e.target.closest(rootSel);
       if (!el) return;
       dragId = el.dataset.id;
       el.classList.add('dragging');

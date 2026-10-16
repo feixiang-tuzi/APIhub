@@ -50,3 +50,6 @@ jobs:
 
       - name: Run smartparse tests
         run: node tests/smartparse.test.js
+
+      - name: Run custom-order regression tests
+        run: node tests/order.test.js
