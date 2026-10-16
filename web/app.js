@@ -1974,7 +1974,11 @@ function renderAll() {
 
 function switchView(v) {
   state.view = v;
-  try { history.replaceState(null, '', '#' + v); } catch (e) {}
+  // 详情页把站点 id 写进 hash，F5 刷新后停留在当前站点；其他视图直接写视图名
+  const hash = (v === 'detail' && state.detailId)
+    ? '#site=' + encodeURIComponent(state.detailId)
+    : '#' + v;
+  try { history.replaceState(null, '', hash); } catch (e) {}
   $$('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === v));
   ['overview', 'models', 'usage', 'sites', 'detail'].forEach(k => {
     const el = $('#view-' + k);
@@ -2212,7 +2216,11 @@ function setupTimer(sec) {
   const h = location.hash.slice(1);
   if (['overview', 'models', 'usage', 'sites'].includes(h)) switchView(h);
   else if (h === 'sites/new') { switchView('sites'); openSiteForm(null); }
-  else if (h.indexOf('site=') === 0) openSiteDetail(h.slice(5));
+  else if (h.indexOf('site=') === 0) {
+    let sid = h.slice(5);
+    try { sid = decodeURIComponent(sid); } catch (e) {}
+    if (sid) openSiteDetail(sid);
+  }
   try {
     await Promise.all([loadConfig(), loadSnapshot()]);
   } catch (e) {
